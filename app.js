@@ -14,7 +14,8 @@ const scenarios=[
 {id:11,cat:'foreign',region:'Indo-Pacific',lat:10,lon:112,title:'Foreign-adversary activity scenario',priority:'Moderate',text:'Exercise inject: fictional military exercises near an international sea lane prompt analysis of regional supply-chain exposure. No real nation is accused.',action:'Brief leadership on transport and economic dependencies.'},
 {id:12,cat:'infra',region:'Australia',lat:-32,lon:145,title:'Water system continuity drill',priority:'Low',text:'Exercise inject: a fictional treatment facility outage requires temporary supply arrangements and public information coordination.',action:'Verify alternative water distribution plans.'}];
 const $=id=>document.getElementById(id),active=new Set(categories.map(c=>c.id));
-let selected=1,paused=false,elapsed=0,serial=8,nextArrival=5,nextFocus=9;
+const MAX_ACTIVE_EVENTS=36;
+let selected=1,paused=false,elapsed=0,serial=24,nextArrival=3,nextFocus=9;
 const readinessSpeeds={5:0.5,4:0.75,3:1,2:2,1:4};
 let eventSpeed=1;
 const paths={
@@ -50,7 +51,9 @@ const icon=s=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 const category=id=>categories.find(c=>c.id===id);
 document.querySelector('.controls').prepend($('filters'));
 document.querySelector('.map-footer').innerHTML=categories.map(c=>'<span style="color:'+c.color+'">'+icon({icon:{weather:'storm',homeland:'shield',foreign:'radar',infra:'power'}[c.id]})+c.name+'</span>').join('');
-let live=[0,17,19,26,36,39,53,59].map((index,i)=>({...scenarios[index],uid:i+1,born:-i*5,expires:28+i*5}));
+const opening=[0,17,19,26,36,39,53,59].map(index=>scenarios[index]);
+opening.push(...shuffle(scenarios.filter(s=>!opening.some(e=>e.id===s.id))).slice(0,16));
+let live=opening.map((s,i)=>({...s,uid:i+1,born:-i*2,expires:60+i*2}));
 pending=pending.filter(s=>!live.some(e=>e.id===s.id));
 let log=live.slice(-3).map(s=>({...s,at:0,state:'DETECTED'}));
 const point=(lon,lat)=>[(lon+180)/360*1000,(90-lat)/180*500];
@@ -93,13 +96,14 @@ function render(){
  setText($('updated'),`NEXT EVENT ${Math.max(0,Math.ceil((nextArrival-elapsed)/eventSpeed))}s · ${eventSpeed}× PACE · ${live.length} ACTIVE`);
 }
 function advance(renderNow=true){
+ if(live.length>=MAX_ACTIVE_EVENTS){nextArrival=elapsed+1;return}
  if(!pending.length)pending=shuffle(scenarios);
  const index=pending.findIndex(s=>!live.some(e=>e.id===s.id));
  if(index<0){nextArrival=elapsed+3;return}
  const source=pending.splice(index,1)[0];
- const s={...source,uid:++serial,born:elapsed,expires:elapsed+38+Math.floor(Math.random()*28)};
+ const s={...source,uid:++serial,born:elapsed,expires:elapsed+90+Math.floor(Math.random()*31)};
  live.push(s);record(s,'DETECTED');if(active.has(s.cat))selected=s.id;
- nextArrival=elapsed+5+Math.floor(Math.random()*4);
+ nextArrival=elapsed+3+Math.floor(Math.random()*2);
  if(renderNow)render();
 }
 document.addEventListener('click',e=>{const layer=e.target.closest('[data-cat]');if(layer){active.has(layer.dataset.cat)?active.delete(layer.dataset.cat):active.add(layer.dataset.cat);render()}const item=e.target.closest('[data-id]');if(item&&live.some(s=>s.id===Number(item.dataset.id)))select(Number(item.dataset.id))});
