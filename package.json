@@ -1,0 +1,7 @@
+{
+  "name": "us-situation-map",
+  "private": true,
+  "version": "1.0.0",
+  "engines": { "node": ">=24" },
+  "scripts": { "start": "node server.cjs", "test": "node --test test/*.test.cjs" }
+}

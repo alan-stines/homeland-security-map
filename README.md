@@ -1,22 +1,47 @@
-# MGA Global Threat Watch
+# MGA US Situation Map
 
-A static, GitHub Pages-compatible homeland security exercise dashboard. Open `index.html` or serve this folder with `python -m http.server 8080`.
+A United States situational awareness dashboard using authoritative public feeds. The fictional exercise version is maintained separately in `alan-stines/homeland-security-map-simulator`.
 
-Designed for unattended full-screen TV display, with a fixed viewport layout and no scrolling. The world map fills the display area, with compact readiness and highlighted-event overlays, a three-bulletin strip, and a single latest-event ticker. Category icons beside Pause toggle the map layers. Use the Full screen button after opening the page.
+## Run
 
-Fictional events arrive every 3–4 simulation seconds and live for 90–120 simulation seconds before fading and clearing. The seeded opening events clear gradually after 60–106 simulation seconds. Readiness controls the simulation clock: level 5 runs at 0.5×, level 4 at 0.75×, level 3 at 1×, level 2 at 2×, and level 1 at 4×. Click a numbered level or choose it in the dropdown. Changing level immediately speeds up or slows down the remaining arrival timers, existing event lifetimes, spotlight rotation, and map animations without resetting events. At level 5, arrivals take about 6–8 real seconds; at level 1, about 0.75–1 second. The next-arrival countdown shows real seconds and the event log shows simulation time.
+Requires **Node.js 24 or later**. There are no npm runtime dependencies and no build step.
 
-New arrivals show expanding rings; aging events dim in their final five simulation seconds. The highlighted location rotates every nine simulation seconds. The catalog contains 60 fictional scenarios and 18 vector icons, including wildfire, blizzard, volcanic ash, floods, hazmat, aviation, rail, rescue, medical logistics, and communications. Opening events span multiple continents; a shuffled catalog gives every scenario a turn before repeating. Event history and the active marker collection remain bounded.
+```sh
+npm start
+```
 
-Rendering reuses unchanged markup and SVG markers. Timer-only display updates run at most once per second, while arrivals, clearing, and controls update immediately. Bulletin progress uses transforms instead of rebuilding cards. The full-map scanning animation was removed to reduce repaints, and simulation work pauses while the page is hidden. The clock uses elapsed real time to preserve readiness speeds when timer callbacks drift.
+The Node server serves the dashboard and `/api/events` on port 8080. Set `PORT` to select another port. Open the server in a browser outside onboarding; the dashboard needs this backend, so opening index.html directly or using GitHub Pages alone no longer supports live data.
 
-Run `node simulation.test.cjs` for catalog validation, no-repeat selection, all readiness speeds, pause/hidden-tab behavior, cached markup, and a 10,000-tick fast-mode soak test.
+```sh
+npm test
+```
 
-Includes category filters, pause/advance controls, keyboard-accessible markers, and a manually selected five-level DEFCON-style exercise readiness indicator. Pause freezes event aging and animation; Next event can still add an event manually. All incidents are fictional; no live intelligence, weather feeds, or official alert levels are represented. Levels run from 5 (routine) to 1 (critical) and do not change automatically.
+Tests use deterministic source fixtures and real local HTTP requests. They cover alert expiry, test/cancel exclusion, source normalization, US viewing regions, geometry lookup failures, declaration pagination/deduplication, request coalescing, polling schedules, source outages, stale-cache preservation, and static-file access restrictions. Fixtures are never served in production.
 
-No build or dependencies are required. Map geometry and the MGA logo are reused from the public MGA threat-sim project. Typography uses Google Fonts with system fallbacks. The dashboard itself and map work without network access after downloading the files.
+## Sources and behavior
 
-For GitHub Pages, publish the repository root from the main branch. This project has not been deployed by this change.
+- **NWS:** actual active weather alerts; polls every two minutes. Forecast-zone boundaries are resolved where necessary. Alerts without complete geometry remain in the nationwide unmapped list.
+- **USGS:** past-day earthquakes within US regional viewing envelopes; polls every minute. Offshore and neighboring border events can appear. Earthquakes leave the display after 24 hours, not after a simulation timer.
+- **FEMA:** recent disaster declarations, refreshed hourly. Context in a separate panel, deduplicated across designated counties; not treated as current warnings.
 
-The display starts with 24 active events and typically sustains roughly 30, with a hard cap of 36 including manually added events.
+Select contiguous US, Alaska, western Aleutians, Hawaii, Puerto Rico/USVI, Guam/Northern Marianas, or American Samoa. Layers, location/event search, keyboard-selectable map features, and official source links support inspection. NWS severity and magnitude-based earthquake display classes are distinct; there is no inferred national readiness level. All times show an explicit timezone.
 
+The backend shares one cache across browser clients, limits requests, coalesces refreshes, and retains the last successful response on failures. NWS data becomes stale after ten minutes, USGS after five minutes, and FEMA after six hours. A failed request marks a previously successful source stale immediately. Expired records are filtered even during outages. Empty successful feeds, unavailable feeds, loading feeds, and stale feeds remain distinct. UI refresh does not bypass upstream polling limits. Caches are in memory and repopulate after restart; this first version is designed for one Node process.
+
+Outbound HTTPS access is required to `api.weather.gov`, `earthquake.usgs.gov`, and `www.fema.gov`. Node's native proxy support uses existing environment proxy settings; TLS verification stays enabled. No API credentials are required. Font and basemap assets are local. Feed errors are visible rather than replaced with fictional data. [SOURCES.md](SOURCES.md) documents attribution, classifications, and limits.
+
+## Coverage expansion
+
+These three sources are a foundation, not comprehensive emergency coverage. Additional adapters should preserve official IDs, source timestamps, geometry, expiry, attribution, deduplication, and independent source health:
+
+1. **Wildfire:** NASA FIRMS satellite detections (requires a free MAP_KEY) plus NIFC/WFIGS incident/perimeter data. Thermal detections, confirmed fires, and mapped perimeters must remain distinct and linked where possible.
+2. **Tropical hazards:** NOAA/NHC advisories and forecast geometry, cross-linked to NWS warnings to avoid presenting duplicate records as separate incidents.
+3. **Flooding:** USGS water gauges and NOAA flood forecasts. Measurements and forecast thresholds are distinct from issued flood warnings.
+4. **Public advisories:** DHS NTAS bulletins, displayed as official nationwide/regional advisories rather than invented incident points.
+5. **Infrastructure:** jurisdiction-specific transport, utility, and emergency management sources. There is no uniform authoritative real-time national incident API for these categories.
+
+Choose and verify each source's current API, terms, update cadence, key requirements, and geography before enabling it. Do not infer incident absence from lack of feed coverage or data. The dashboard does not replace official emergency notifications.
+
+## Deployment
+
+Deploy as a Node web service with HTTPS in front of it. A static GitHub Pages deployment cannot run ingestion or caching. For a multi-instance deployment, move caching and rate limiting into shared storage before scaling. No deployment is performed by these changes.
