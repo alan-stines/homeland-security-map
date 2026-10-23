@@ -1,7 +1,7 @@
 'use strict';
 const regions = require('./regions.js');
 const MINUTE = 60_000;
-const validDate = value => Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
+const validDate = value => value!==null && value!==undefined && value!=='' && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
 const clean = (value, max = 20000) => typeof value === 'string' ? value.slice(0,max) : '';
 const regionFor = (lon,lat) => regions.find(r => lon>=r.bounds[0] && lon<=r.bounds[2] && lat>=r.bounds[1] && lat<=r.bounds[3]);
 function safeLink(value, host) {
@@ -51,18 +51,61 @@ function normalizeFema(data, now=Date.now()) {
   }
   return [...grouped.values()];
 }
+function normalizeNifc(data) {
+  if (!Array.isArray(data?.features) || data.error) throw new Error('Invalid NIFC feature collection');
+  return data.features.flatMap(f=>{
+    const p=f.properties || {}, loc=location(f.geometry);
+    const updated=validDate(p.ModifiedOnDateTime_dt), issued=validDate(p.FireDiscoveryDateTime);
+    if (!loc || f.geometry?.type!=='Point' || !p.IrwinID || p.IncidentTypeCategory!=='WF' || p.FireOutDateTime || !updated) return [];
+    const acres=Number.isFinite(p.IncidentSize)?`${p.IncidentSize.toLocaleString('en-US')} acres reported`:'Size not reported';
+    const containment=Number.isFinite(p.PercentContained)?`${p.PercentContained}% containment reported`:'Containment not reported';
+    return [{id:'nifc:'+p.IrwinID,source:'nifc',category:'wildfire',title:clean(p.IncidentName,200)+' wildfire',area:clean(p.POOState,40),severity:'Reported',issued:issued||updated,updated,expires:null,url:'https://www.nifc.gov/fire-information/maps',description:`${acres}. ${containment}. Reported incident location, not a fire perimeter or evacuation boundary. Containment is not a measure of public safety.`,instruction:'Check local emergency management and official fire information for evacuation orders and current conditions.',location:loc,geometry:f.geometry}];
+  });
+}
+function normalizeNwps(data, now=Date.now()) {
+  if (!Array.isArray(data?.gauges)) throw new Error('Invalid NOAA NWPS gauge response');
+  const rank={minor:1,moderate:2,major:3};
+  return data.gauges.flatMap(p=>{
+    const geometry={type:'Point',coordinates:[p.longitude,p.latitude]},loc=location(geometry);
+    if (!loc || !p.lid) return [];
+    const samples=['observed','forecast'].flatMap(kind=>{
+      const s=p.status?.[kind],time=validDate(s?.validTime),category=clean(s?.floodCategory,40).toLowerCase();
+      if (!rank[category] || !time || Date.parse(time)<now-24*60*MINUTE || (kind==='forecast' && Date.parse(time)<now) || (kind==='observed' && Date.parse(time)>now+5*MINUTE)) return [];
+      return [{kind,category,time,value:Number.isFinite(s.primary)?`${s.primary} ${clean(s.primaryUnit,30)}`:'Level unavailable'}];
+    });
+    if (!samples.length) return [];
+    const peak=samples.reduce((a,b)=>rank[b.category]>rank[a.category]?b:a),observed=samples.find(s=>s.kind==='observed');
+    const updated=observed?.time||peak.time;
+    return [{id:'nwps:'+p.lid,source:'nwps',category:'river',title:`${peak.category[0].toUpperCase()+peak.category.slice(1)} river flooding · ${peak.kind==='observed'?'observed':'forecast'}`,area:[clean(p.name,300),clean(p.state?.abbreviation,20)].filter(Boolean).join(' · '),severity:{minor:'Minor',moderate:'Moderate',major:'Severe'}[peak.category],issued:updated,updated,expires:new Date(Math.max(...samples.map(s=>Date.parse(s.time)))+24*60*MINUTE).toISOString(),url:'https://water.noaa.gov/gauges/'+encodeURIComponent(p.lid.toLowerCase()),description:samples.map(s=>`${s.kind==='observed'?'Observed':'Forecast'}: ${s.category} flooding, ${s.value}; valid ${s.time}.`).join('\n')+'\nGauge location only; this marker is not a flood extent. Only minor, moderate, or major flood categories are displayed.',instruction:'Consult the official gauge hydrograph and NWS warnings for impacts and protective actions.',location:loc,geometry}];
+  });
+}
+const nifcUrl='https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Incident_Locations_Current/FeatureServer/0/query';
+const riverBase='https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer';
+const riverUrl=(layer,offset=0)=>riverBase+'/'+layer+'/query?'+new URLSearchParams({where:"status IN ('minor','moderate','major')",outFields:'*',outSR:'4326',f:'geojson',orderByFields:'objectid ASC',resultRecordCount:'2000',resultOffset:String(offset)});
+const riverTime=value=>typeof value==='string' && /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(value)?value.replace(' ','T')+'Z':value;
 const definitions = [
+  {id:'nifc',name:'NIFC Wildfire Incidents',interval:5*MINUTE,staleAfter:20*MINUTE,url:()=>nifcUrl+'?'+new URLSearchParams({where:"IncidentTypeCategory = 'WF' AND FireOutDateTime IS NULL",outFields:'OBJECTID,IrwinID,IncidentName,IncidentTypeCategory,POOState,IncidentSize,PercentContained,FireDiscoveryDateTime,FireOutDateTime,ModifiedOnDateTime_dt',outSR:'4326',f:'geojson',orderByFields:'OBJECTID ASC',resultRecordCount:'2000',resultOffset:'0'}),normalize:normalizeNifc,scope:'Reported current wildfire locations in US viewing regions. Not fire perimeters or evacuation orders; incident updates vary.'},
+  {id:'nwps',name:'NOAA River Flooding',interval:10*MINUTE,staleAfter:30*MINUTE,url:()=>riverUrl(0),normalize:normalizeNwps,scope:'US gauges with observed or forecast minor, moderate, or major flooding. Gauge points are not flood extents. Valid times are shown separately from feed fetch times.'},
   {id:'nws',name:'National Weather Service',interval:2*MINUTE,staleAfter:10*MINUTE,url:()=> 'https://api.weather.gov/alerts/active?status=actual&message_type=alert,update',normalize:normalizeNws,scope:'Active actual alerts; coverage depends on NWS reporting.'},
   {id:'usgs',name:'USGS Earthquakes',interval:MINUTE,staleAfter:5*MINUTE,url:()=> 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson',normalize:normalizeUsgs,scope:'Past 24 hours within US viewing regions, including nearby offshore/border events.'},
   {id:'fema',name:'FEMA Disaster Declarations',interval:60*MINUTE,staleAfter:6*60*MINUTE,url:now=> 'https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?'+new URLSearchParams({'$filter':`declarationDate ge '${new Date(now-90*24*60*MINUTE).toISOString()}'`,'$orderby':'declarationDate desc','$top':'1000','$skip':'0'}),normalize:normalizeFema,scope:'Declarations from the past 90 days. Administrative context, not live incidents.'}
 ];
-function createFeedService({fetchImpl=fetch,clock=Date.now}={}) {
+function createFeedService({fetchImpl=fetch,clock=Date.now,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}) {
   const state=new Map(definitions.map(d=>[d.id,{events:[],lastSuccess:null,lastAttempt:null,error:null,inFlight:null}]));
   const zoneCache=new Map();
   async function getJson(url) {
-    // NWS requests require an identifying User-Agent; the USGS CDN rejects this custom agent.
-    const headers=new URL(url).hostname==='earthquake.usgs.gov'?{'Accept':'application/json'}:{'User-Agent':'USSituationMap/1.0 (source-linked situational awareness dashboard)','Accept':'application/geo+json, application/json'};
-    const response=await fetchImpl(url,{headers,signal:AbortSignal.timeout(15000),redirect:'error'});
+    // NWS requires identification; other upstream CDNs may reject custom agents.
+    const headers={'Accept':'application/geo+json, application/json'};
+    if(new URL(url).hostname==='api.weather.gov') headers['User-Agent']='USSituationMap/1.0 (source-linked situational awareness dashboard)';
+    const request=()=>fetchImpl(url,{headers,signal:AbortSignal.timeout(15000),redirect:'error'});
+    let response=await request();
+    if(response.status===429 && new URL(url).hostname==='mapservices.weather.noaa.gov') {
+      const retry=response.headers.get('retry-after');
+      const delay=retry===null?5000:/^\d+$/.test(retry)?Number(retry)*1000:Date.parse(retry)-clock();
+      if(Number.isFinite(delay) && delay<=30000) {
+        await response.body?.cancel();await wait(Math.max(1000,delay));response=await request();
+      }
+    }
     if (!response.ok) throw new Error(`Upstream HTTP ${response.status}`);
     // Cap upstream payloads to avoid retaining unbounded source responses.
     const reader=response.body?.getReader();
@@ -105,7 +148,40 @@ function createFeedService({fetchImpl=fetch,clock=Date.now}={}) {
     s.lastAttempt=clock();
     s.inFlight=(async()=>{
       try {
-        const now=clock();let data=await getJson(d.url(now));
+        const now=clock();let data;
+        if(d.id==='nwps') {
+          const gauges=new Map();
+          for(const [layer,kind] of [[0,'observed'],[15,'forecast']]) {
+            let offset=0;
+            for(;;) {
+              const page=await getJson(riverUrl(layer,offset));
+              if(!Array.isArray(page?.features) || page.error) throw new Error('Invalid NOAA river GIS response');
+              for(const f of page.features) {
+                const p=f.properties||{};if(!p.gaugelid || f.geometry?.type!=='Point')continue;
+                if(!gauges.has(p.gaugelid)) gauges.set(p.gaugelid,{lid:p.gaugelid,name:[p.waterbody,p.location].filter(Boolean).join(' at '),state:{abbreviation:p.state},longitude:f.geometry.coordinates[0],latitude:f.geometry.coordinates[1],status:{}});
+                const g=gauges.get(p.gaugelid),raw=p[kind];
+                g.status[kind]={floodCategory:p.status,primary:raw!==null && raw!==''?Number(raw):null,primaryUnit:p.units,validTime:riverTime(kind==='observed'?p.obstime:p.fcsttime)};
+              }
+              if(!page.exceededTransferLimit && !page.properties?.exceededTransferLimit && page.features.length<2000)break;
+              if(!page.features.length || offset+page.features.length>=20000)throw new Error('Incomplete NOAA river pagination');
+              offset+=page.features.length;
+            }
+          }
+          data={gauges:[...gauges.values()]};
+        } else data=await getJson(d.url(now));
+        if(d.id==='nifc') {
+          if(!Array.isArray(data?.features) || data.error) throw new Error('Invalid NIFC response');
+          const records=[...data.features];
+          while(data.exceededTransferLimit || data.properties?.exceededTransferLimit || data.features.length===2000) {
+            if(records.length>=20000) throw new Error('NIFC pagination limit reached; retaining previous cache');
+            const url=new URL(d.url(now));url.searchParams.set('resultOffset',String(records.length));
+            data=await getJson(url.href);
+            if(!Array.isArray(data?.features) || data.error) throw new Error('Invalid NIFC page');
+            if(!data.features.length && (data.exceededTransferLimit || data.properties?.exceededTransferLimit)) throw new Error('Incomplete NIFC pagination');
+            records.push(...data.features);
+          }
+          data={features:records};
+        }
         if(d.id==='fema') {
           // OpenFEMA returns one record per designated area. Fetch every page before replacing cache.
           const records=[...data.DisasterDeclarationsSummaries || []];
@@ -134,4 +210,4 @@ function createFeedService({fetchImpl=fetch,clock=Date.now}={}) {
   }
   return {snapshot,refreshAll:()=>Promise.allSettled(definitions.map(refresh))};
 }
-module.exports={createFeedService,normalizeNws,normalizeUsgs,normalizeFema,regionFor,definitions};
+module.exports={createFeedService,normalizeNws,normalizeUsgs,normalizeFema,normalizeNifc,normalizeNwps,regionFor,definitions};

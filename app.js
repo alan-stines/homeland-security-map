@@ -3,8 +3,8 @@ const $=id=>document.getElementById(id);
 const svgNS='http://www.w3.org/2000/svg';
 const regionDefinitions=window.US_REGIONS;
 let currentRegion=regionDefinitions[0], selected=null, payload={events:[],sources:[]}, busy=false, lastReceived=null;
-const enabled=new Set(['weather','earthquake']);
-const sourceNames={nws:'NWS',usgs:'USGS',fema:'FEMA'};
+const enabled=new Set(['weather','earthquake','wildfire','river']);
+const sourceNames={nws:'NWS',usgs:'USGS',fema:'FEMA',nifc:'NIFC',nwps:'NOAA NWPS'};
 function el(tag,text,cls){const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;}
 function svg(tag,attrs){const node=document.createElementNS(svgNS,tag);for(const [key,value] of Object.entries(attrs))node.setAttribute(key,value);return node;}
 function date(value){return value?new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'}):'Not available';}
@@ -26,7 +26,7 @@ function choose(id){selected=id;render();}
 function bindSelection(node,e){node.dataset.id=e.id;node.setAttribute('tabindex','0');node.setAttribute('role','button');node.setAttribute('aria-label',e.title+', '+e.area);node.addEventListener('click',()=>choose(e.id));node.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();choose(e.id);}});}
 function renderBase(){
  const {height,point}=projection();$('map').setAttribute('viewBox',`0 0 960 ${height}`);$('clip-rect').setAttribute('width',960);$('clip-rect').setAttribute('height',height);
- $('map').setAttribute('aria-label',currentRegion.name+' alerts and recent earthquakes');
+ $('map').setAttribute('aria-label',currentRegion.name+' weather alerts, wildfires, river flooding and earthquakes');
  const nodes=[];
  for(const c of window.WORLD_DATA.countries){
   const g={type:c.geomType,coordinates:c.coordinates};
@@ -43,7 +43,9 @@ function renderMap(events){
  // Larger polygons first so smaller warning areas remain selectable.
  for(const e of events){
   if(e.geometry?.type==='Point'){
-   const [x,y]=point(e.location.lon,e.location.lat),node=svg('circle',{cx:x,cy:y,r:e.severity==='Severe'?9:6,class:'quake'+(e.id===selected?' selected':'')});bindSelection(node,e);node.append(svg('title',{}));node.firstChild.textContent=e.title+' · '+e.area;markers.push(node);
+   const [x,y]=point(e.location.lon,e.location.lat),cls='quake '+e.category+(e.id===selected?' selected':'');
+   const node=e.category==='wildfire'?svg('path',{d:'M0,-7 L7,6 L-7,6 Z',transform:`translate(${x},${y})`,class:cls}):e.category==='river'?svg('path',{d:'M0,-7 L6,0 L0,7 L-6,0 Z',transform:`translate(${x},${y})`,class:cls}):svg('circle',{cx:x,cy:y,r:e.severity==='Severe'?9:6,class:cls});
+   bindSelection(node,e);node.append(svg('title',{}));node.firstChild.textContent=e.title+' · '+e.area;markers.push(node);
   }else{
    const node=svg('path',{d:geometryPath(e.geometry,point),class:'alert-area '+e.severity+(e.id===selected?' selected':''),'fill-rule':'evenodd'});bindSelection(node,e);const title=svg('title',{});title.textContent=e.title+' · '+e.area;node.append(title);areas.push(node);
   }
@@ -53,11 +55,12 @@ function renderMap(events){
 function renderDetail(){
  const e=activeEvents().find(e=>e.id===selected),target=$('detail');
  target.replaceChildren();
- if(!e){target.append(el('h3','Select an alert or earthquake'),el('p','Choose a map area or a list entry to see its source, timestamps, and official guidance. Empty feeds do not establish that an area is safe.'));return;}
+ if(!e){target.append(el('h3','Select an alert or reported condition'),el('p','Choose a map area or a list entry to see its source, timestamps, and official guidance. Empty feeds do not establish that an area is safe.'));return;}
  const source=sourceStatus(e.source);
  target.append(badge(e),el('h3',e.title),el('p',e.area));
+ if(e.source==='nwps')target.append(el('p','Observed and forecast valid times are listed below. Feed fetch time appears in Source health.'));
  const dl=el('dl');
- for(const [label,value] of [['Source',source?.name||sourceNames[e.source]],['Issued',date(e.issued)],['Revised',date(e.updated)],['Expires',e.source==='usgs'?'24-hour display window':e.expires?date(e.expires):'Administrative context'],['Feed',source?.status||'Unknown']])dl.append(el('dt',label),el('dd',value));
+ for(const [label,value] of [['Source',source?.name||sourceNames[e.source]],[e.source==='nwps'?'Gauge valid':'Issued',date(e.issued)],[e.source==='nwps'?'Fetched':'Revised',date(e.source==='nwps'?source?.lastSuccess:e.updated)],['Expires',e.source==='usgs'?'24-hour display window':e.source==='nifc'?'Until source removes incident':e.source==='nwps'?'Replaced on source refresh':e.expires?date(e.expires):'Administrative context'],['Feed',source?.status||'Unknown']])dl.append(el('dt',label),el('dd',value));
  target.append(dl);
  if(source?.status!=='ok')target.append(el('p','SOURCE DEGRADED — verify this information at the official source.'));
  if(e.zoneDerived)target.append(el('p','Map boundary uses affected NWS forecast zones.'));
@@ -70,7 +73,7 @@ function render(){
  const all=[...events,...unmapped].sort((a,b)=>({Extreme:0,Severe:1,Moderate:2,Minor:3,Unknown:4}[a.severity]??5)-({Extreme:0,Severe:1,Moderate:2,Minor:3,Unknown:4}[b.severity]??5)||Date.parse(b.issued)-Date.parse(a.issued));
  renderMap(events);renderDetail();
  $('map-count').textContent=`${events.length} mapped records`;
- for(const type of ['weather','earthquake'])$(type+'-count').textContent=activeEvents().filter(e=>e.category===type&&inRegion(e)).length;
+ for(const type of ['weather','earthquake','wildfire','river'])$(type+'-count').textContent=activeEvents().filter(e=>e.category===type&&inRegion(e)).length;
  $('map-summary').textContent=`${unmapped.length} NWS alerts nationwide have no resolved map geometry. Overlapping alerts can cover the same area.`;
  $('list-count').textContent=`${all.length} results${all.length>100?' · showing first 100':''}`;
  const rows=all.slice(0,100).map(e=>{const b=el('button',undefined,'event-row');b.setAttribute('aria-pressed',e.id===selected);b.append(badge(e),el('strong',e.title),el('small',e.area+(e.location?'':' · Unmapped')),el('small',sourceNames[e.source]+' · '+date(e.issued)));b.addEventListener('click',()=>choose(e.id));return b;});
