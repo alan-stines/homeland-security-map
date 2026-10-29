@@ -3,3 +3,8 @@
 .state-boundary{fill:#392747;fill-opacity:.12;stroke:#a78dbb;stroke-opacity:.48;stroke-width:.65;vector-effect:non-scaling-stroke;pointer-events:none}
 
 .quake.wildfire{fill:#ff9067;stroke:#54251f;stroke-width:1.5}.quake.river{fill:#69d9e8;stroke:#dbfaff;stroke-width:1.5}.quake.selected{stroke:#fff;stroke-width:3}.toolbar{flex-wrap:wrap}.toolbar fieldset{flex:1 1 380px}.badge.Reported{color:#ffb28d}
+
+/* Compact masthead keeps the operating picture near the top of the viewport. */
+header{padding:8px 24px;gap:12px}.brand{gap:12px}.brand img{width:138px}.brand small{font-size:9px;letter-spacing:1.2px}h1{font-size:21px;margin:0}.header-actions button{padding:6px 10px;font-size:12px}main{padding:10px 24px 24px}#connection{margin:0 0 10px;padding:6px 10px;font-size:11px}.map-head{padding:10px 14px}#regions{padding:8px 12px}
+@media(max-width:700px){header{padding:8px 12px}.brand{flex-direction:row;align-items:center;gap:10px}.brand img{width:100px}.brand small{font-size:7px;letter-spacing:.5px}h1{font-size:17px}.header-actions{gap:5px}.header-actions button{font-size:10px;padding:4px 7px}main{padding:8px 12px 18px}}
+@media(max-width:420px){.brand img{width:76px}.brand{gap:7px}h1{font-size:15px}.brand small{font-size:6px}}
